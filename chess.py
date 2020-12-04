@@ -195,7 +195,7 @@ class Chess():
 """
 
 if __name__ == '__main__':
-    transport = serial.Serial(port="COM10", baudrate = 115200)
+    transport = serial.Serial(port="COM12", baudrate = 115200)
     robot = Robot(transport)
     robotRxTask = Thread(target = robot.rxTask)
     robotRxTask.start()
