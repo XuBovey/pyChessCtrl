@@ -3,6 +3,18 @@ from threading import Thread
 import time
 import serial
 
+Z_MV_LEN = 20
+X_HOME = -52
+Y_HOME = -128
+Z_HOME = -17
+
+CHESS_WIDTH = 23.2
+CHESS_LENGHT = 23
+
+MAX_LEN     = 400
+MAX_WIDTH   = 400
+MAX_HIGH    = 200
+
 class Postion():
     def __init__(self, x=0, y=0, z=0):
         self.x = x
@@ -105,7 +117,8 @@ class Robot():
 
     def reset(self):
         self.release()
-        self.goPostion([400, 400, 100]) # 移动到不可达位置，使得必然触发限位器动作
+        self.goPostion([MAX_WIDTH, MAX_LEN, MAX_HIGH]) # 移动到不可达位置，使得必然触发限位器动作
+
         while not self.isStop():
             time.sleep(0.5)
         
@@ -130,7 +143,7 @@ class Chess():
         self.width = width
         self.length = length
         self.robot = robot
-        self.home = [-35, -35, -20]
+        self.home = [X_HOME, Y_HOME, Z_HOME]
 
     def reset(self):
         self.sendCmd("reset")
@@ -145,7 +158,7 @@ class Chess():
             time.sleep(0.5)
         
         # 2 吸取棋子 // pick
-        self.robot.mvZ(-15) # -10mm
+        self.robot.mvZ(-Z_MV_LEN) # -10mm
         print("move to chess")
         # wait to move
         while not self.robot.isStop():
@@ -153,7 +166,7 @@ class Chess():
         self.robot.pick()
         print("pick up")
         time.sleep(1)
-        self.robot.mvZ(+15) # 10mm
+        self.robot.mvZ(+Z_MV_LEN) # 10mm
         print("ready to move")
         # wait to move
         while not self.robot.isStop():
@@ -175,13 +188,13 @@ class Chess():
         # wait to move
 
         # 4 放置棋子
-        self.robot.mvZ(-15) # -10mm
+        self.robot.mvZ(-Z_MV_LEN) # -10mm
         while not self.robot.isStop():
             time.sleep(0.5)
         # wait to move
         self.robot.release()
         time.sleep(1)
-        self.robot.mvZ(15) # 10mm
+        self.robot.mvZ(Z_MV_LEN) # 10mm
         while not self.robot.isStop():
             time.sleep(0.5)
 """
@@ -200,11 +213,16 @@ if __name__ == '__main__':
     robotRxTask = Thread(target = robot.rxTask)
     robotRxTask.start()
 
+    print('unlock')
     robot.unlock()
+    print("reset")
     robot.reset()
+    print("reset done")
 
-    chess = Chess(robot = robot)
+    chess = Chess(robot = robot, width = CHESS_WIDTH, length = CHESS_LENGHT)
+    print("go home")
     chess.goHome()
+    time.sleep(2)
     while True:
         chess.getChess(0,0)
         chess.putChess(10,0)
