@@ -5,15 +5,33 @@ import serial
 
 Z_MV_LEN = 20
 X_HOME = -52
-Y_HOME = -128
+Y_HOME = -126
 Z_HOME = -17
 
-CHESS_WIDTH = 23.2
-CHESS_LENGHT = 23
+CHESS_WIDTH = 281.5/12
+CHESS_LENGHT = 272.5/12
 
 MAX_LEN     = 400
 MAX_WIDTH   = 400
 MAX_HIGH    = 200
+
+chess_list = [
+    [[7,'G'],[6,'F']], # Black, White
+    [[7,'F'],[8,'G']],
+    [[7,'H'],[7,'I']],
+    [[7,'E'],[7,'D']],
+    [[6,'G'],[5,'H']],
+    [[5,'F'],[4,'E']],
+    [[8,'I'],[9,'J']],
+    [[8,'F'],[9,'E']],
+    [[9,'G'],[10,'H']],
+    [[6,'D'],[5,'C']],
+    [[8,'E'],[8,'J']],
+    [[7,'J'],[9,'K']],
+    [[10,'L'],[9,'I']],
+    [[11,'G'],[9,'L']],
+    [[9,'H'],[9,'M']],
+]
 
 class Postion():
     def __init__(self, x=0, y=0, z=0):
@@ -34,23 +52,28 @@ class Robot():
         self.xState = 0 # stop
         self.yState = 0 # stop
         self.zState = 0 # stop
+
+        self._running = True
     
     def rxTask(self):
-        while True:
-            if self.transport.in_waiting:
-                data = self.transport.readline()
-                str_data = str(data)
-                if "X.STATUS" in str_data:
-                    if "STOPPED" in str_data:
-                        self.xState = 0
-                elif "Y.STATUS" in str_data:
-                    if "STOPPED" in str_data:
-                        self.yState = 0
-                elif "Z.STATUS" in str_data:
-                    if "STOPPED" in str_data:
-                        self.zState = 0
-                else:
-                    print(str(data))
+        while self._running == True:
+            try:
+                if self.transport.in_waiting:
+                    data = self.transport.readline()
+                    str_data = str(data)
+                    if "X.STATUS" in str_data:
+                        if "STOPPED" in str_data:
+                            self.xState = 0
+                    elif "Y.STATUS" in str_data:
+                        if "STOPPED" in str_data:
+                            self.yState = 0
+                    elif "Z.STATUS" in str_data:
+                        if "STOPPED" in str_data:
+                            self.zState = 0
+                    else:
+                        print(str(data))
+            except:
+                return
             time.sleep(0.1)
 
     def cmdSend(self, data):
@@ -128,6 +151,8 @@ class Robot():
         time.sleep(1)
     
     def isStop(self):
+        if self._running == False:
+            return True
         if self.xState == 1:
             self.cmdSend("getX.status\n")
         if self.yState == 1:
@@ -193,22 +218,13 @@ class Chess():
             time.sleep(0.5)
         # wait to move
         self.robot.release()
-        time.sleep(1)
+        time.sleep(0.5)
         self.robot.mvZ(Z_MV_LEN) # 10mm
         while not self.robot.isStop():
             time.sleep(0.5)
-"""
-        # 5 回到取棋子位置
-        self.robot.goPostion(self.home)
-        print("go home...")
-        while not self.robot.isStop():
-            time.sleep(0.5)
-        # 6 调用回调函数
-        # 
-"""
 
 if __name__ == '__main__':
-    transport = serial.Serial(port="COM12", baudrate = 115200)
+    transport = serial.Serial(port="COM13", baudrate = 115200)
     robot = Robot(transport)
     robotRxTask = Thread(target = robot.rxTask)
     robotRxTask.start()
@@ -223,13 +239,19 @@ if __name__ == '__main__':
     print("go home")
     chess.goHome()
     time.sleep(2)
-    while True:
-        chess.getChess(0,0)
-        chess.putChess(10,0)
-        chess.getChess(10,0)
-        chess.putChess(10,10)
-        chess.getChess(10,10)
-        chess.putChess(0,10)
-        chess.getChess(0,10)
-        chess.putChess(0,0)
 
+    step_count = 1
+    for step in chess_list:
+        print (step_count)
+        chess.getChess(0,0)
+        chess.putChess(step[0][0]-1,ord(step[0][1])-ord('A')) # black
+        chess.getChess(12,12)
+        chess.putChess(step[1][0]-1,ord(step[1][1])-ord('A')) # white
+        step_count = step_count + 1
+    
+    chess.goHome()
+
+    robotRxTask._running = False
+    if transport.isOpen():
+        transport.flush()
+        transport.close()
