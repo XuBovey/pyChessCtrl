@@ -2,6 +2,9 @@ import sys
 from threading import Thread
 import time
 import serial
+from robot_key_ctrl import ROBOT_KeyCtrl
+
+COM_PORT = "COM13"
 
 Z_MV_LEN = 20
 X_HOME = -52
@@ -11,8 +14,8 @@ Z_HOME = -17
 CHESS_WIDTH = 281.5/12
 CHESS_LENGHT = 272.5/12
 
-MAX_LEN     = 400
-MAX_WIDTH   = 400
+MAX_LEN     = 500
+MAX_WIDTH   = 500
 MAX_HIGH    = 200
 
 chess_list = [
@@ -54,27 +57,35 @@ class Robot():
         self.zState = 0 # stop
 
         self._running = True
+        self.stateUpdateTime = int(time.time())
     
     def rxTask(self):
-        while self._running == True:
-            try:
-                if self.transport.in_waiting:
-                    data = self.transport.readline()
-                    str_data = str(data)
+        while True:
+            while self.transport.in_waiting == 0:
+                if self._running == False:
+                    return
+                pass
+            data = str(transport.readall())
+            data_list = data.split('\\n')
+            for str_data in data_list:
+                print (str_data)
+
+                if "STOPPED" in str_data: # moveto target stop
                     if "X.STATUS" in str_data:
-                        if "STOPPED" in str_data:
-                            self.xState = 0
+                        self.xState = 0
                     elif "Y.STATUS" in str_data:
-                        if "STOPPED" in str_data:
-                            self.yState = 0
+                        self.yState = 0
                     elif "Z.STATUS" in str_data:
-                        if "STOPPED" in str_data:
-                            self.zState = 0
-                    else:
-                        print(str(data))
-            except:
-                return
-            time.sleep(0.1)
+                        self.zState = 0
+                    print("STOPPED:", self.xState, self.yState, self.zState)
+                elif 'stop' in str_data: # limited stop
+                    if "X.stop" in str_data:
+                        self.xState = 0
+                    elif "Y.stop" in str_data:
+                        self.yState = 0
+                    elif "Z.stop" in str_data:
+                        self.zState = 0
+                    print("stop:", self.xState, self.yState, self.zState)
 
     def cmdSend(self, data):
         # print(">>:", data)
@@ -98,6 +109,7 @@ class Robot():
         self.yState = 1
         self.zState = 1
         self.cmdSend("setX:{:}setY:{:}setZ:{:}\n".format(xsteps, ysteps, zsteps))
+        self.stateUpdateTime = int(time.time())
 
     def mvPostion(self, xyz):
         xsteps, ysteps, zsteps = self.xyzToStep(xyz[0], xyz[1], xyz[2])
@@ -105,22 +117,27 @@ class Robot():
         self.yState = 1
         self.zState = 1
         self.cmdSend("addX:{:}addY:{:}addZ:{:}\n".format(xsteps, ysteps, zsteps))
+        self.stateUpdateTime = int(time.time())
 
     def mvZ(self, z):
         self.zState = 1
         self.cmdSend("addZ:{:}\n".format(int(z / self.zStepLen)))
+        self.stateUpdateTime = int(time.time())
     
     def mvY(self, y):
         self.yState = 1
         self.cmdSend("addY:{:}\n".format(int(y / self.yStepLen)))
+        self.stateUpdateTime = int(time.time())
 
     def mvX(self, x):
         self.xState = 1
         self.cmdSend("addX:{:}\n".format(int(x / self.xStepLen)))
+        self.stateUpdateTime = int(time.time())
     
     def setX(self, x):
         self.xState = 1
         self.cmdSend("setX:{:}\n".format(int(x / self.xStepLen)))
+        self.stateUpdateTime = int(time.time())
 
     def pick(self):
         self.cmdSend("setP.pump:0\n")
@@ -153,14 +170,20 @@ class Robot():
     def isStop(self):
         if self._running == False:
             return True
-        if self.xState == 1:
-            self.cmdSend("getX.status\n")
-        if self.yState == 1:
-            self.cmdSend("getY.status\n")
-        if self.zState == 1:
-            self.cmdSend("getZ.status\n")
-        time.sleep(1)
-        return (self.xState == 0 and self.yState == 0 and self.zState == 0)
+        
+        if self.xState == 0 and self.yState == 0 and self.zState == 0:
+            return True
+
+        if self.stateUpdateTime +5 <= int(time.time()):
+            if self.xState == 1:
+                self.cmdSend("getX.status\n")
+            if self.yState == 1:
+                self.cmdSend("getY.status\n")
+            if self.zState == 1:
+                self.cmdSend("getZ.status\n")
+            self.stateUpdateTime = int(time.time())
+            print("check stop cmd: ", self.stateUpdateTime, ":", self.xState, self.yState, self.zState)
+        return False
 
 class Chess():
     def __init__(self, robot = None, cb=None, width = 22.5, length = 22.5): # width,length mm
@@ -173,9 +196,9 @@ class Chess():
     def reset(self):
         self.sendCmd("reset")
     
-    def getChess(self, row, col):
+    def getChess(self, row, col, row_offset = 0, col_offset = 0):
         # 1 移动到取棋子位置
-        postion = [-row*self.width + self.home[0], -col*self.length + self.home[1], self.home[2]]
+        postion = [-row*self.width + self.home[0] - row_offset, -col*self.length + self.home[1] - col_offset, self.home[2]]
         print("move to row:{:} col:{:} x:{:}, y:{:}".format(row, col, postion[0], postion[1]))
         self.robot.goPostion(postion)
         # wait to move
@@ -207,6 +230,7 @@ class Chess():
         # 3 移动到目标位置
         postion = [-row*self.width + self.home[0], -col*self.length + self.home[1], self.home[2]]
         self.robot.goPostion(postion)
+        time.sleep(1)
         print("move to row:{:} col:{:} x:{:}, y:{:}".format(row, col, postion[0], postion[1]))
         while not self.robot.isStop():
             time.sleep(0.5)
@@ -223,11 +247,60 @@ class Chess():
         while not self.robot.isStop():
             time.sleep(0.5)
 
+def key_cb(key):
+    print(key)
+    if key == 'Z': 
+        print("exit cmd.")
+        robot._running = False
+    if key == 'T':
+        demoTask.start() 
+
+def exit():
+    if transport.isOpen():
+        transport.flush()
+        transport.close()
+
+def demo1():
+    chess.goHome()
+    time.sleep(2)
+
+    print("start demo")
+    step_count = 1
+    for step in chess_list:
+        print (step_count)
+        chess.getChess(row = 0, col = 0 + step_count - 1, col_offset = 0, row_offset= -10)
+        chess.putChess(step[0][0]-1, ord(step[0][1])-ord('A')) # black
+        chess.getChess(12, 12 - (step_count - 1), col_offset = 0, row_offset= 6)
+        chess.putChess(step[1][0]-1, ord(step[1][1])-ord('A')) # white
+        step_count = step_count + 1
+        if robot._running == False:
+            exit()
+    
+    print("pick all chess back")
+    for step in chess_list:
+        print (step_count)
+        chess.getChess(step[0][0]-1, ord(step[0][1])-ord('A')) # black
+        chess.putChess(row = 0, col = 0 + step_count - 1, col_offset = 0, row_offset= -10)
+        chess.getChess(step[1][0]-1, ord(step[1][1])-ord('A')) # white
+        chess.putChess(12, 12 - (step_count - 1), col_offset = 0, row_offset= 6)
+        
+        step_count = step_count + 1
+        if robot._running == False:
+            exit()
+    
+    print("stop demo")
+    chess.goHome()
+
+transport = serial.Serial(port=COM_PORT, baudrate = 115200, timeout = 0.1)
+robot = Robot(transport)
+robotRxTask = Thread(target = robot.rxTask)
+chess = Chess(robot = robot, width = CHESS_WIDTH, length = CHESS_LENGHT)
+demoTask = Thread(target = demo1)
+
 if __name__ == '__main__':
-    transport = serial.Serial(port="COM13", baudrate = 115200)
-    robot = Robot(transport)
-    robotRxTask = Thread(target = robot.rxTask)
     robotRxTask.start()
+
+    key_ctr= ROBOT_KeyCtrl(key_cb)
 
     print('unlock')
     robot.unlock()
@@ -235,23 +308,6 @@ if __name__ == '__main__':
     robot.reset()
     print("reset done")
 
-    chess = Chess(robot = robot, width = CHESS_WIDTH, length = CHESS_LENGHT)
-    print("go home")
-    chess.goHome()
-    time.sleep(2)
-
-    step_count = 1
-    for step in chess_list:
-        print (step_count)
-        chess.getChess(0,0)
-        chess.putChess(step[0][0]-1,ord(step[0][1])-ord('A')) # black
-        chess.getChess(12,12)
-        chess.putChess(step[1][0]-1,ord(step[1][1])-ord('A')) # white
-        step_count = step_count + 1
-    
-    chess.goHome()
-
-    robotRxTask._running = False
-    if transport.isOpen():
-        transport.flush()
-        transport.close()
+    while robot._running == True:
+        pass
+    exit()

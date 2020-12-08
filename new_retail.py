@@ -5,7 +5,7 @@ import serial
 from robot_arm_ik import robot_arm_ik
 from robot_key_ctrl import ROBOT_KeyCtrl
 
-COM_PORT = 'COM13'
+COM_PORT = 'COM7'
 
 _STEP = 50
 _CMD = 0
@@ -41,14 +41,21 @@ class Robot():
         self.targetY = 0
         self.targetZ = 0
 
+        self.targetAngle = [0,0,0]
+        self.currentAngle = [0,0,0]
         self.m1Max = 90
         self.m1Min = -90
         self.m2Max = 90
         self.m2Min = 17.0
         self.m3Max = 60 #40
         self.m3Min = -78.0
+        self.angleMax = [self.m1Max, self.m2Max, self.m3Max]
+        self.angleMin = [self.m1Min, self.m2Min, self.m3Min]
+        
         self.deltM2M3Min = 2
         self.deltM2M3Max = 130
+
+        self.motoResetState = [False, False, False]
 
         self._running = True
         self.stateUpdateTime = time.time()
@@ -74,39 +81,54 @@ class Robot():
             self.lStop = vol
     
     def rxTask(self):
-        while self._running == True:
-            try:
-                if self.transport.in_waiting:
-                    data = self.transport.readline()
-                    str_data = str(data)
-                    if "STOPPED" in str_data: # moveto target stop
-                        if "M.STATUS" in str_data:
-                            self.setMotoStopVol('M',True)
-                        elif "N.STATUS" in str_data:
-                            self.setMotoStopVol('N',True)
-                        elif "O.STATUS" in str_data:
-                            self.setMotoStopVol('O',True)
-                        elif "L.STATUS" in str_data:
-                            self.setMotoStopVol('L',True)
-                    elif 'stop' in str_data: # limited stop
-                        if "M.stop" in str_data:
-                            self.setMotoStopVol('M',True)
-                        elif "N.stop" in str_data:
-                            self.setMotoStopVol('N',True)
-                        elif "O.stop" in str_data:
-                            self.setMotoStopVol('O',True)
-                        elif "L.stop" in str_data:
-                            self.setMotoStopVol('L',True)
+        while True:
+            while self.transport.in_waiting == 0:
+                if self._running == False:
+                    return
+                pass
+            data_all = str(self.transport.readall())
+            data_list = data_all.split('\\n')
+            for str_data in data_list:
+                if "STOPPED" in str_data: # move to target stop
+                    if "M.STATUS" in str_data:
+                        self.setMotoStopVol('M',True)
+                    elif "N.STATUS" in str_data:
+                        self.setMotoStopVol('N',True)
+                    elif "O.STATUS" in str_data:
+                        self.setMotoStopVol('O',True)
+                    elif "L.STATUS" in str_data:
+                        self.setMotoStopVol('L',True)
+                    if self.isStop():
+                        self.curX = self.targetX
+                        self.curY = self.targetY
+                        self.curZ = self.targetZ
+                        self.currentAngle = self.targetAngle[:]
+     
+                elif 'stop' in str_data: # limited stop
+                    if "M.stop" in str_data:
+                        self.setMotoStopVol('M',True)
+                        if "limit" in str_data:
+                            self.motoResetState[0] = True
+                    elif "N.stop" in str_data:
+                        self.setMotoStopVol('N',True)
+                        if "limit" in str_data:
+                            self.motoResetState[1] = True
+                    elif "O.stop" in str_data:
+                        self.setMotoStopVol('O',True)
+                        if "limit" in str_data:
+                            self.motoResetState[2] = True
+                    elif "L.stop" in str_data:
+                        self.setMotoStopVol('L',True)
+                        if "limit" in str_data:
                             self.lLimitStopEvent = True
                             print("L LIMITED STOP")
-                    else:
-                        # print(str_data)
-                        pass
-            except:
-                return
+                    if self.isStop():
+                        self.curX = self.targetX
+                        self.curY = self.targetY
+                        self.curZ = self.targetZ
+                        self.currentAngle = self.targetAngle[:]
 
     def cmdSend(self, data):
-        # print(">>:", data)
         self.transport.write(data.encode('UTF-8'))
 
     def angleToStep(self, m1Angle, m2Angle, m3Angle):
@@ -136,20 +158,15 @@ class Robot():
         # if (m2 - m3) < self.deltM2M3Min or (m2 - m3) > self.deltM2M3Min:
         #     print("Error: xyzToStep postion5")
         #     return (0,0,0)
-
+        self.targetAngle = [m1, m2, m3]
         return self.angleToStep(m1, m2, m3)
 
     def goPostion(self, xyz, style = 0):
-        # print("go postion:",xyz)
-
         if self.targetX == xyz[0] and self.targetY == xyz[1] and self.targetZ == xyz[2]:
             return
 
         mSteps, nSteps, oSteps = self.xyzToStep(xyz[0], xyz[1], xyz[2])
-        if mSteps == 0 and nSteps == 0 and oSteps == 0:
-            self.curX = self.targetX
-            self.curY = self.targetY
-            self.curZ = self.targetZ
+        if (mSteps + nSteps + oSteps) == 0:
             return
 
         self.targetX = xyz[0]
@@ -198,12 +215,14 @@ class Robot():
 
     # moto = 'M', 'N', 'O'
     # angle = -180~180
-    def mvAngle(self, moto, angle):
+    def mvAngle(self, moto, angle, wait = True):
         self.setMotoStopVol(moto, False)
         anglePerStep = self.anglePerStep
         if moto == 'L':
             anglePerStep = self.LanglePerStep
         self.cmdSend("add{:}:{:}\n".format(moto, angle / anglePerStep))
+        if wait != True:
+            return
         while not self.isStop():
             time.sleep(2)
    
@@ -217,38 +236,41 @@ class Robot():
         self.cmdSend("setP.pump:1\n")
 
     def reset(self):
+        print("reset step1")
         self.release()
         # 远离限位器移动一点距离，防止已经运动到限位器位置
-        self.mvAngle('M', -3)
-        self.mvAngle('N', -5)
+        self.mvAngle('M', -3, False)
+        self.mvAngle('N', -5, False)
         self.mvAngle('O', -3)
         self.setMotoStopVol('M', False)
         self.setMotoStopVol('N', False)
         self.setMotoStopVol('O', False)
-        while not self.isStop():
-            time.sleep(2)
+        time.sleep(1)
 
-        self.mvAngle('M', 360)
-        self.mvAngle('N', 360)
-        self.mvAngle('O', 360)
+        print("reset step2")
+        self.mvAngle('M', 180, False)
+        self.mvAngle('N', 180, False)
+        self.mvAngle('O', 180)
         self.setMotoStopVol('N', False)
         self.setMotoStopVol('M', False)
         self.setMotoStopVol('O', False)
-        while not self.isStop():
-            time.sleep(2)
+        time.sleep(1)
 
+        print("reset step3")
         self.cmdSend("setM.currentPosition:{:}\n".format(74 / self.anglePerStep))
         self.cmdSend("setN.currentPosition:{:}\n".format(90 / self.anglePerStep))
         self.cmdSend("setO.currentPosition:{:}\n".format(40 / self.anglePerStep))
         time.sleep(0.5)
-        self.mvAngle('M', -74)
-        self.mvAngle('N', -5)
-        self.mvAngle('O', -40)
-        self.setMotoStopVol('N', False)
-        self.setMotoStopVol('M', False)
-        self.setMotoStopVol('O', False)
+        # self.mvAngle('M', -74, False)
+        # self.mvAngle('N', -5, False)
+        # self.mvAngle('O', -40)
+        # self.setMotoStopVol('N', False)
+        # self.setMotoStopVol('M', False)
+        # self.setMotoStopVol('O', False)
+        self.goPostion(p_home)
         while not self.isStop():
             time.sleep(2)
+        print("reset done")
 
     def isStop(self):
         if self._running == False:
@@ -277,62 +299,67 @@ class new_retail():
         time.sleep(1)
 
     def pick_from_postion(self, p):
-        pre_postion = [p[0]* 0.8, p[1]* 0.8, p[2]* 1.2]
+        pre_postion = [p[0]* 0.8, p[1]* 0.8, p[2]+20]
         print("goto pre posion")
         self.robot.goPostion(pre_postion, style=1) # 先动大小臂
         print("goto target postion")
         self.robot.goPostion(p, style=1) # 先动大小臂
         print("pick")
         self.robot.pick()
-        time.sleep(1)
-        print("move O 1 degree")
-        self.robot.mvAngle('O', 5)
-        time.sleep(1)
-        print("goto pre posion")
-        self.robot.goPostion(pre_postion, style=1) # 先动大小臂
+        time.sleep(0.5)
+        print("move O and N 3 degree")
+        self.robot.mvAngle('O', 2, False)
+        self.robot.mvAngle('N', 1)
+        # time.sleep(0.1)
+        # print("goto pre posion")
+        # self.robot.goPostion(pre_postion, style=1) # 先动大小臂
         print("go home")
         self.robot.goPostion(p_home, style=1) # 先动大小臂
 
     def put_to_postion(self, p):
-        pre_postion = [p[0]* 0.8, p[1]* 0.8, p[2]* 1.2]
+        pre_postion = [p[0]* 0.8, p[1]* 0.8, p[2]+20]
         print("goto pre posion")
         self.robot.goPostion(pre_postion, style=1) # 先动大小臂
         print("goto target postion")
         self.robot.goPostion(p, style=1) # 先动大小臂
         print("release")
         self.robot.release()
-        time.sleep(1)
-        print("move O 5 degree")
-        self.robot.mvAngle('O', 5)
-        time.sleep(1)
-        print("goto pre posion")
-        self.robot.goPostion(pre_postion, style=1) # 先动大小臂
+        time.sleep(0.2)
+        print("move O and N 3 degree")
+        self.robot.mvAngle('O', 2, False)
+        self.robot.mvAngle('N', 1)
+        # time.sleep(0.2)
+        # print("goto pre posion")
+        # self.robot.goPostion(pre_postion, style=1) # 先动大小臂
         print("go home")
         self.robot.goPostion(p_home, style=1) # 先动大小臂
 
+    def wait_box(self):
+        self.robot.setMotoStopVol('L', False)
+        self.robot.lLimitStopEvent = False
+        while self.robot.lLimitStopEvent == False and self.robot._running:
+            time.sleep(0.5)
+        current_time = int(time.time())
+        while current_time > int(time.time()) - 4:
+            current_time = int(time.time())
+            print("move line")
+            self.robot.mvL(550)
+
     def demo1(self):
-        i = 0
+        i = 1
         pic_p = postion_list[0]
-        for p in postion_list:
-            if i == 0: 
-                i += 1
-                continue
-            self.robot.setMotoStopVol('L', False)
-            self.robot.lLimitStopEvent = False
-            while self.robot.lLimitStopEvent == False and self.robot._running:
-                print("move line0")
-                self.robot.mvL(650)
-            print("move line1")
-            self.robot.mvL(300)
+        print("demo1")
+        for p in postion_list[1:]:
+            print("waiting...")
+            self.wait_box()
             print("go home")
             self.robot.goPostion(p_home)
             print("pick from p[{:}]".format(i))
             self.pick_from_postion(pic_p)
-            time.sleep(1)
+            time.sleep(0.2)
             print("pick from p[{:}]".format(i))
             self.put_to_postion(p)
             i += 1
-
     
 def key_cmd_list():
     print("Z - exit     R - reset")
@@ -348,7 +375,7 @@ def key_cb(key):
     global _STEP
     global _CMD
     global demo_show
-    # print(key.upper())
+    print(key.upper())
     if key == 'Z': robot._running = False
     if key == 'R': 
         robot.reset() 
@@ -362,8 +389,8 @@ def key_cb(key):
     if key == 'S': robot.mvY(-_STEP)
     if key == 'Q': robot.mvZ(_STEP)
     if key == 'E': robot.mvZ(-_STEP)
-    if key == 'M': robot.mvL(100)
-    if key == 'N': robot.mvL(-100)
+    if key == 'M': robot.mvL(600)
+    if key == 'N': robot.mvL(-600)
     if key == 'B': robot.goPostion(p_home)
     if key == '+' or key == '=': 
         _STEP = _STEP + 10 if _STEP < 100  else 100
@@ -378,7 +405,7 @@ def key_cb(key):
     if key == '5': _CMD = 5
     if key == 'T': demo_show = 1
 
-transport = serial.Serial(port=COM_PORT, baudrate = 115200)
+transport = serial.Serial(port=COM_PORT, baudrate = 115200, timeout=0.1)
 robot = Robot(transport)
 robotRxTask = Thread(target = robot.rxTask)
 
@@ -402,6 +429,8 @@ if __name__ == '__main__':
         if demo_show == 1:
             demo_show = 0
             demo.demo1()
+            # while True:
+                # demo.wait_box()
         time.sleep(1)
 
     print("exit")
